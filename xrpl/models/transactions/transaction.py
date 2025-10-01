@@ -1,29 +1,36 @@
 """The base model for all transactions and their nested object types."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from hashlib import sha512
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Type, Union, cast
 
-from typing_extensions import Final
+from typing_extensions import Final, Self
 
 from xrpl.core.binarycodec import decode, encode
 from xrpl.models.amounts import IssuedCurrencyAmount
+from xrpl.models.amounts.mpt_amount import MPTAmount
 from xrpl.models.base_model import ABBREVIATIONS, BaseModel
 from xrpl.models.exceptions import XRPLModelException
-from xrpl.models.flags import check_false_flag_definition, interface_to_flag_list
+from xrpl.models.flags import (
+    FlagInterface,
+    check_false_flag_definition,
+    interface_to_flag_list,
+)
 from xrpl.models.nested_model import NestedModel
 from xrpl.models.requests import PathStep
 from xrpl.models.required import REQUIRED
 from xrpl.models.transactions.types import PseudoTransactionType, TransactionType
 from xrpl.models.types import XRPL_VALUE_TYPE
-from xrpl.models.utils import require_kwargs_on_init
+from xrpl.models.utils import KW_ONLY_DATACLASS, require_kwargs_on_init
 
 _TRANSACTION_HASH_PREFIX: Final[int] = 0x54584E00
 
 
 def transaction_json_to_binary_codec_form(
-    dictionary: Dict[str, XRPL_VALUE_TYPE]
+    dictionary: Dict[str, XRPL_VALUE_TYPE],
 ) -> Dict[str, XRPL_VALUE_TYPE]:
     """
     Returns a new dictionary in which the keys have been formatted as CamelCase and
@@ -65,6 +72,8 @@ def _value_to_tx_json(value: XRPL_VALUE_TYPE) -> XRPL_VALUE_TYPE:
         return value
     if IssuedCurrencyAmount.is_dict_of_model(value):
         return value
+    if MPTAmount.is_dict_of_model(value):
+        return value
     if isinstance(value, dict):
         return transaction_json_to_binary_codec_form(value)
     if isinstance(value, list):
@@ -73,7 +82,7 @@ def _value_to_tx_json(value: XRPL_VALUE_TYPE) -> XRPL_VALUE_TYPE:
 
 
 @require_kwargs_on_init
-@dataclass(frozen=True)
+@dataclass(frozen=True, **KW_ONLY_DATACLASS)
 class Memo(NestedModel):
     """
     An arbitrary piece of data attached to a transaction. A transaction can
@@ -101,7 +110,7 @@ class Memo(NestedModel):
     the memo data.
     """
 
-    def _get_errors(self: Memo) -> Dict[str, str]:
+    def _get_errors(self: Self) -> Dict[str, str]:
         errors = super()._get_errors()
         present_memo_fields = [
             field
@@ -118,7 +127,7 @@ class Memo(NestedModel):
 
 
 @require_kwargs_on_init
-@dataclass(frozen=True)
+@dataclass(frozen=True, **KW_ONLY_DATACLASS)
 class Signer(NestedModel):
     """
     One Signer in a multi-signature. A multi-signed transaction can have an
@@ -126,7 +135,7 @@ class Signer(NestedModel):
     field.
     """
 
-    account: str = REQUIRED  # type: ignore
+    account: str = REQUIRED
     """
     The address of the Signer. This can be a funded account in the XRP
     Ledger or an unfunded address.
@@ -135,7 +144,7 @@ class Signer(NestedModel):
     :meta hide-value:
     """
 
-    txn_signature: str = REQUIRED  # type: ignore
+    txn_signature: str = REQUIRED
     """
     The signature that this Signer provided for this transaction.
     This field is required.
@@ -143,7 +152,7 @@ class Signer(NestedModel):
     :meta hide-value:
     """
 
-    signing_pub_key: str = REQUIRED  # type: ignore
+    signing_pub_key: str = REQUIRED
     """
     The public key that should be used to verify this Signer's signature.
     This field is required.
@@ -152,11 +161,26 @@ class Signer(NestedModel):
     """
 
 
-T = TypeVar("T", bound="Transaction")  # any type inherited from Transaction
+class TransactionFlag(int, Enum):
+    """
+    Transactions of the Transaction type support additional values in the Flags field.
+    This enum represents those options.
+    """
+
+    TF_INNER_BATCH_TXN = 0x40000000
+
+
+class TransactionFlagInterface(FlagInterface):
+    """
+    Transactions support additional values in the Flags field. This TypedDict
+    represents those options.
+    """
+
+    TF_INNER_BATCH_TXN: bool
 
 
 @require_kwargs_on_init
-@dataclass(frozen=True)
+@dataclass(frozen=True, **KW_ONLY_DATACLASS)
 class Transaction(BaseModel):
     """
     The base class for all `transaction types
@@ -164,16 +188,14 @@ class Transaction(BaseModel):
     transaction types <https://xrpl.org/transaction-common-fields.html>`_.
     """
 
-    account: str = REQUIRED  # type: ignore
+    account: str = REQUIRED
     """
     The address of the sender of the transaction. Required.
 
     :meta hide-value:
     """
 
-    transaction_type: Union[
-        TransactionType, PseudoTransactionType
-    ] = REQUIRED  # type: ignore
+    transaction_type: Union[TransactionType, PseudoTransactionType] = REQUIRED
 
     fee: Optional[str] = None  # auto-fillable
     """
@@ -199,7 +221,7 @@ class Transaction(BaseModel):
     details.
     """
 
-    flags: Union[Dict[str, bool], int, List[int]] = 0
+    flags: Optional[Union[Dict[str, bool], int, List[int]]] = None
     """
     A List of flags, or a bitwise map of flags, modifying this transaction's
     behavior. See `Flags Field
@@ -252,10 +274,10 @@ class Transaction(BaseModel):
     network_id: Optional[int] = None
     """The network id of the transaction."""
 
-    def _get_errors(self: Transaction) -> Dict[str, str]:
-        # import must be here to avoid circular dependencies
-        from xrpl.wallet.main import Wallet
+    delegate: Optional[str] = None
+    """The delegate account that is sending the transaction."""
 
+    def _get_errors(self: Self) -> Dict[str, str]:
         errors = super()._get_errors()
         if self.ticket_sequence is not None and (
             (self.sequence is not None and self.sequence != 0)
@@ -266,12 +288,12 @@ class Transaction(BaseModel):
             ] = """If ticket_sequence is provided,
             account_txn_id must be None and sequence must be None or 0"""
 
-        if isinstance(self.account, Wallet):
-            errors["account"] = "Must pass in `wallet.address`, not `wallet`."
+        if self.account == self.delegate:
+            errors["delegate"] = "Account and delegate addresses cannot be the same"
 
         return errors
 
-    def to_dict(self: Transaction) -> Dict[str, Any]:
+    def to_dict(self: Self) -> Dict[str, Any]:
         """
         Returns the dictionary representation of a Transaction.
 
@@ -280,14 +302,17 @@ class Transaction(BaseModel):
         """
         # we need to override this because transaction_type is using ``field``
         # which will not include the value in the objects __dict__
-        return {
+        prepared_dict = {
             **super().to_dict(),
             "transaction_type": self.transaction_type.value,
-            "flags": self._flags_to_int(),
         }
+        flags = self._flags_to_int()
+        if flags is not None:
+            prepared_dict["flags"] = flags
+        return prepared_dict
 
     def _iter_to_int(
-        self: Transaction,
+        self: Self,
         lst: List[int],
     ) -> int:
         """Calculate flag as int."""
@@ -296,7 +321,9 @@ class Transaction(BaseModel):
             accumulator |= flag
         return accumulator
 
-    def _flags_to_int(self: Transaction) -> int:
+    def _flags_to_int(self: Self) -> int | None:
+        if self.flags is None:
+            return None
         if isinstance(self.flags, int):
             return self.flags
         check_false_flag_definition(tx_type=self.transaction_type, tx_flags=self.flags)
@@ -310,7 +337,7 @@ class Transaction(BaseModel):
 
         return self._iter_to_int(lst=self.flags)
 
-    def to_xrpl(self: Transaction) -> Dict[str, Any]:
+    def to_xrpl(self: Self) -> Dict[str, Any]:
         """
         Creates a JSON-like dictionary in the JSON format used by the binary codec
         based on the Transaction object.
@@ -320,7 +347,7 @@ class Transaction(BaseModel):
         """
         return transaction_json_to_binary_codec_form(self.to_dict())
 
-    def blob(self: Transaction) -> str:
+    def blob(self: Self) -> str:
         """
         Creates the canonical binary format of the Transaction object.
 
@@ -330,7 +357,7 @@ class Transaction(BaseModel):
         return encode(self.to_xrpl())
 
     @classmethod
-    def from_dict(cls: Type[T], value: Dict[str, Any]) -> T:
+    def from_dict(cls: Type[Self], value: Dict[str, Any]) -> Self:
         """
         Construct a new Transaction from a dictionary of parameters.
 
@@ -350,7 +377,7 @@ class Transaction(BaseModel):
                     "Transaction does not include transaction_type."
                 )
             correct_type = cls.get_transaction_type(value["transaction_type"])
-            return correct_type.from_dict(value)  # type: ignore
+            return cast(Self, correct_type.from_dict(value))
         else:
             if "transaction_type" in value:
                 if value["transaction_type"] != cls.__name__:
@@ -361,9 +388,9 @@ class Transaction(BaseModel):
                     )
                 value = {**value}
                 del value["transaction_type"]
-            return super(Transaction, cls).from_dict(value)
+            return super().from_dict(value)
 
-    def has_flag(self: Transaction, flag: int) -> bool:
+    def has_flag(self: Self, flag: int) -> bool:
         """
         Returns whether the transaction has the given flag value set.
 
@@ -373,7 +400,12 @@ class Transaction(BaseModel):
 
         Returns:
             Whether the transaction has the given flag value set.
+
+        Raises:
+            XRPLModelException: if `self.flags` is invalid.
         """
+        if self.flags is None:
+            return False
         if isinstance(self.flags, int):
             return self.flags & flag != 0
         elif isinstance(self.flags, dict):
@@ -381,10 +413,12 @@ class Transaction(BaseModel):
                 tx_type=self.transaction_type,
                 tx_flags=self.flags,
             )
-        else:  # is List[int]
+        elif isinstance(self.flags, list):
             return flag in self.flags
+        else:
+            raise XRPLModelException("self.flags is not an int, dict, or list")
 
-    def is_signed(self: Transaction) -> bool:
+    def is_signed(self: Self) -> bool:
         """
         Checks if a transaction has been signed.
 
@@ -402,7 +436,7 @@ class Transaction(BaseModel):
             self.signing_pub_key is not None and len(self.signing_pub_key) > 0
         ) and (self.txn_signature is not None and len(self.txn_signature) > 0)
 
-    def get_hash(self: Transaction) -> str:
+    def get_hash(self: Self) -> str:
         """
         Hashes the Transaction object as the ledger does. Only valid for signed
         Transaction objects.
@@ -413,7 +447,11 @@ class Transaction(BaseModel):
         Raises:
             XRPLModelException: if the Transaction is unsigned.
         """
-        if self.txn_signature is None and self.signers is None:
+        if (
+            self.txn_signature is None
+            and self.signers is None
+            and not self.has_flag(TransactionFlag.TF_INNER_BATCH_TXN)
+        ):
             raise XRPLModelException(
                 "Cannot get the hash from an unsigned Transaction."
             )
@@ -423,7 +461,7 @@ class Transaction(BaseModel):
 
     @classmethod
     def get_transaction_type(
-        cls: Type[Transaction], transaction_type: str
+        cls: Type[Self], transaction_type: str
     ) -> Type[Transaction]:
         """
         Returns the correct transaction type based on the string name.
@@ -456,9 +494,6 @@ class Transaction(BaseModel):
 
         raise XRPLModelException(f"{transaction_type} is not a valid Transaction type")
 
-    class Config:
-        smart_union = True
-
     @staticmethod
     def from_blob(tx_blob: str) -> Transaction:
         """
@@ -473,7 +508,7 @@ class Transaction(BaseModel):
         return Transaction.from_xrpl(decode(tx_blob))
 
     @classmethod
-    def from_xrpl(cls: Type[T], value: Union[str, Dict[str, Any]]) -> T:
+    def from_xrpl(cls: Type[Self], value: Union[str, Dict[str, Any]]) -> Self:
         """
         Creates a Transaction object based on a JSON or JSON-string representation of
         data
@@ -491,7 +526,6 @@ class Transaction(BaseModel):
                                 amount and deliver_max fields
         """
         processed_value = cls._process_xrpl_json(value)
-
         # handle the deliver_max alias in Payment transactions
         if (
             "transaction_type" in processed_value

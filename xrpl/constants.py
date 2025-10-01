@@ -1,4 +1,5 @@
 """Collection of public constants for XRPL."""
+
 import re
 from decimal import Context
 from enum import Enum
@@ -20,12 +21,19 @@ class XRPLException(Exception):
     pass
 
 
-ISO_CURRENCY_REGEX: Final[Pattern[str]] = re.compile("[A-Za-z0-9]{3}")
+SPECIAL_CHARS_CURRENCY_CODE = re.escape("?!@#$%^&*(){}[]<>|")
+ISO_CURRENCY_REGEX: Final[Pattern[str]] = re.compile(
+    "[A-Za-z0-9" + SPECIAL_CHARS_CURRENCY_CODE + "]{3}"
+)
 """
 Matches ISO currencies like "USD" or "EUR" in the format allowed by XRPL.
+Check the docs for more information:
+https://xrpl.org/currency-formats.html#standard-currency-codes
 
 :meta private:
 """
+
+HEX_REGEX: Final[Pattern[str]] = re.compile(r"^[0-9A-Fa-f]+$")
 
 HEX_CURRENCY_REGEX: Final[Pattern[str]] = re.compile("[A-F0-9]{40}")
 """
@@ -33,6 +41,8 @@ Matches hex-encoded currencies in the format allowed by XRPL.
 
 :meta private:
 """
+
+HEX_MPTID_REGEX: Final[Pattern[str]] = re.compile(r"^[0-9A-Fa-f]{48}$")
 
 # Constants for validating amounts.
 MIN_IOU_EXPONENT: Final[int] = -96
